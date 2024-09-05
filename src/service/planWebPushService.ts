@@ -1,4 +1,3 @@
-import { NextFunction, Request, Response } from 'express';
 import * as nodeSchedule from 'node-schedule';
 import { WebPushDTO } from '../types/WebPushDTO';
 import * as webPush from 'web-push';
@@ -14,19 +13,28 @@ let webPushSchedules: {
     scheduleJob: nodeSchedule.Job;
   }[];
 } = {};
+
 /**
  * 유저 계획 리스트를 돌며 start, end 타임을 가져옴
  * 스케줄에 시작 시간만 웹 푸시 등록함
  * 웹 푸시 정보는 유저 webPushSubscription에 있는데 여러개가 있을 수도 있음.
  */
 export const initWebPushSchedules = async () => {
+  console.time('executionTime'); // 타이머 시작
+  console.log('스케줄링 초기화 시작');
   let res: WebPushDTO.User[] = [];
+  let jobCount = 0;
+
   try {
+    const headers = new Headers();
+    headers.set('token', process.env.SCHEDULE_SERVER_TOKEN!);
     res = await fetch('http://localhost:3000/api/web-push', {
       method: 'get',
+      headers,
     }).then((res) => res.json());
   } catch (e) {
     console.error(e);
+    return;
   }
 
   webPush.setVapidDetails(
@@ -47,11 +55,61 @@ export const initWebPushSchedules = async () => {
         .replace(':00.000Z', '')
         .split(':')
         .map(Number);
+      // 유저의 각 계획마다 스케줄 등록
+      const job = makeSchedule(startTime[0], startTime[1], () => {
+        user.WebPushSubscription.forEach((subscription) => {
+          notify(subscription.subscription_info, {
+            type: 'PLAN_START_TIME',
+            title: `"${plan.subject}"을(를) 시작하실 시간입니다!`,
+          });
+        });
+      });
+
+      if (webPushSchedules[user.id]) {
+        webPushSchedules[user.id].push({
+          scheduleJob: job,
+          planId: plan.id,
+        });
+      } else {
+        webPushSchedules[user.id] = [
+          {
+            scheduleJob: job,
+            planId: plan.id,
+          },
+        ];
+      }
+      jobCount++;
+    });
+  });
+
+  console.log('job개수: ', jobCount, '개');
+  console.timeEnd('executionTime');
+};
+
+export const updateWebPushSchedule = (users: WebPushDTO.User[]) => {
+  // 기존 스케줄 제거
+  users.forEach((user) => {
+    deleteSchedule(user.id);
+  });
+
+  users.forEach((user) => {
+    user.plans.forEach((plan) => {
+      const startTime = plan.startTime
+        .split('T')[1]
+        .replace(':00.000Z', '')
+        .split(':')
+        .map(Number);
+      const endTime = plan.endTime
+        .split('T')[1]
+        .replace(':00.000Z', '')
+        .split(':')
+        .map(Number);
 
       const job = makeSchedule(startTime[0], startTime[1], () => {
         user.WebPushSubscription.forEach((subscription) => {
           notify(subscription.subscription_info, {
-            message: `"${plan.subject}"을(를) 시작하실 시간입니다!`,
+            type: 'PLAN_START_TIME',
+            title: `"${plan.subject}"을(를) 시작하실 시간입니다!`,
           });
         });
       });
@@ -71,62 +129,14 @@ export const initWebPushSchedules = async () => {
       }
     });
   });
+
+  return;
 };
 
-export const addWebPushSchedule = (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
-  const user: WebPushDTO.User = req.body;
-
-  // 기존 스케줄 제거 후
+export const deleteWebPushSchedule = (user: Pick<WebPushDTO.User, 'id'>) => {
   deleteSchedule(user.id);
 
-  user.plans.forEach((plan) => {
-    const startTime = plan.startTime
-      .split('T')[1]
-      .replace(':00.000Z', '')
-      .split(':')
-      .map(Number);
-    const endTime = plan.endTime
-      .split('T')[1]
-      .replace(':00.000Z', '')
-      .split(':')
-      .map(Number);
-
-    const job = makeSchedule(startTime[0], startTime[1], () => {
-      user.WebPushSubscription.forEach((subscription) => {
-        notify(subscription.subscription_info, {
-          message: `"${plan.subject}"을(를) 시작하실 시간입니다!`,
-        });
-      });
-    });
-
-    if (webPushSchedules[user.id]) {
-      webPushSchedules[user.id].push({
-        scheduleJob: job,
-        planId: plan.id,
-      });
-    } else {
-      webPushSchedules[user.id] = [
-        {
-          scheduleJob: job,
-          planId: plan.id,
-        },
-      ];
-    }
-  });
-};
-
-export const deleteWebPushSchedule = (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
-  const user: Pick<WebPushDTO.User, 'id'> = req.body;
-
-  deleteSchedule(user.id);
+  return;
 };
 
 const deleteSchedule = (userId: string) => {
