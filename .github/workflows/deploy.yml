@@ -31,6 +31,7 @@ jobs:
             pm2 delete haalnam-push-server
           else
             echo "haalnam-push-server is not running."
+          fi
 
       - run: pm2 start npm --name haalnam-push-server -- run start
       # - run: npm run start
